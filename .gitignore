@@ -1,0 +1,12 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+
+# Log files
+uvicorn.log
+
+# Test files
+sample.pdf
+
+# Environment variables
+.env
