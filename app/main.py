@@ -1,11 +1,10 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI
 from langchain_core.messages import HumanMessage
-from typing import Optional
 import shutil
 import os
-
+import base64
+from app.schemas import UserChatMessage
 from app.agent.agent_basico import agent
-from app.config.model import cohere
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,20 +15,33 @@ app = FastAPI(
 )
 
 @app.post("/chat")
-async def chat(question: str = Form(...), file: Optional[UploadFile] = File(None)):
+async def chat(message: UserChatMessage):
     file_path = None
-    if file:
-        temp_dir = "temp_files"
-        os.makedirs(temp_dir, exist_ok=True)
-        file_path = os.path.join(temp_dir, file.filename)
+    text_content = ""
 
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+    for part in message.content:
+        if part.type == "text":
+            text_content = part.text
+        elif part.type == "file":
+            temp_dir = "temp_files"
+            os.makedirs(temp_dir, exist_ok=True)
 
-        question_with_file = f"{question}\n\nHere is the path to the file you need to summarize: {file_path}"
+            # Extract file name from mime_type for simplicity, or generate one
+            # This is a simplification. In a real app, you might want a better way to name files.
+            file_extension = part.mime_type.split("/")[-1]
+            file_name = f"uploaded_file.{file_extension}"
+            file_path = os.path.join(temp_dir, file_name)
+
+            file_data = base64.b64decode(part.data)
+
+            with open(file_path, "wb") as buffer:
+                buffer.write(file_data)
+
+    if file_path:
+        question_with_file = f"{text_content}\n\nHere is the path to the file you need to summarize: {file_path}"
         init_State = {"messages": [HumanMessage(content=question_with_file)]}
     else:
-        init_State = {"messages": [HumanMessage(content=question)]}
+        init_State = {"messages": [HumanMessage(content=text_content)]}
 
     response = agent.invoke(init_State)
 
