@@ -1,51 +1,54 @@
-from fastapi import FastAPI
-from langchain_core.messages import HumanMessage
-import shutil
-import os
-import base64
-from app.schemas import UserChatMessage
-from app.agent.agent_basico import agent
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
+from app.rag_handler import RAGHandler
+
+# Load environment variables
 load_dotenv()
 
+# --- Simplified Approach ---
+# Instantiate the RAG handler directly at the global scope.
+# This relies on the server running with a single worker process to maintain state.
+rag_handler_instance = RAGHandler()
+
 app = FastAPI(
-    title="Tavily API",
-    description="API for Tavily, a platform for AI-powered chatbots.",
+    title="Servicio RAG con PDF",
+    description="API para cargar un PDF y hacerle preguntas.",
 )
 
-@app.post("/chat")
-async def chat(message: UserChatMessage):
-    file_path = None
-    text_content = ""
+# Pydantic model for the query request body
+class QueryRequest(BaseModel):
+    question: str
 
-    for part in message.content:
-        if part.type == "text":
-            text_content = part.text
-        elif part.type == "file":
-            temp_dir = "temp_files"
-            os.makedirs(temp_dir, exist_ok=True)
+@app.get("/")
+def read_root():
+    """A simple endpoint to confirm the server is running."""
+    return {"message": "¡Ah del barco! El servicio RAG está en funcionamiento."}
 
-            # Extract file name from mime_type for simplicity, or generate one
-            # This is a simplification. In a real app, you might want a better way to name files.
-            file_extension = part.mime_type.split("/")[-1]
-            file_name = f"uploaded_file.{file_extension}"
-            file_path = os.path.join(temp_dir, file_name)
+@app.post("/upload-pdf")
+async def upload_pdf(file: UploadFile = File(...)):
+    """
+    Endpoint to upload a PDF file.
+    The file is processed and stored in the in-memory vector store.
+    """
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a PDF.")
 
-            file_data = base64.b64decode(part.data)
+    try:
+        pdf_bytes = await file.read()
+        rag_handler_instance.process_pdf(pdf_bytes)
+        return {"message": f"File '{file.filename}' processed successfully. You can now ask questions."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {e}")
 
-            with open(file_path, "wb") as buffer:
-                buffer.write(file_data)
-
-    if file_path:
-        question_with_file = f"{text_content}\n\nHere is the path to the file you need to summarize: {file_path}"
-        init_State = {"messages": [HumanMessage(content=question_with_file)]}
-    else:
-        init_State = {"messages": [HumanMessage(content=text_content)]}
-
-    response = agent.invoke(init_State)
-
-    if file_path and os.path.exists(file_path):
-        os.remove(file_path)
-
-    return {"response": response["messages"][-1].content}
+@app.post("/query")
+async def query(request: QueryRequest):
+    """
+    Endpoint to ask a question about the uploaded PDF.
+    """
+    try:
+        answer = rag_handler_instance.answer_question(request.question)
+        return {"answer": answer}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get an answer: {e}")
